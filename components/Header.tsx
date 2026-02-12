@@ -1,13 +1,24 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "../lib/supabaseClient";
 
-
 export default function Header() {
+  const [user, setUser] = useState<any>(null);
+
+  useEffect(() => {
+    const getUser = async () => {
+      const { data } = await supabase.auth.getUser();
+      setUser(data.user);
+    };
+
+    getUser();
+  }, []);
+
   const logout = async () => {
     await supabase.auth.signOut();
-    window.location.href = "/";
+    window.location.href = "/login";
   };
 
   return (
@@ -25,19 +36,32 @@ export default function Header() {
             Home
           </Link>
 
-          <Link
-            href="/new"
-            className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 transition font-medium text-white"
-          >
-            + New Post
-          </Link>
+          {user && (
+            <>
+              <Link
+                href="/new"
+                className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 transition font-medium text-white"
+              >
+                + New Post
+              </Link>
 
-          <button
-            onClick={logout}
-            className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 transition font-medium text-white"
-          >
-            Logout
-          </button>
+              <button
+                onClick={logout}
+                className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 transition text-white"
+              >
+                Logout
+              </button>
+            </>
+          )}
+
+          {!user && (
+            <Link
+              href="/login"
+              className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 transition text-white"
+            >
+              Login
+            </Link>
+          )}
         </nav>
       </div>
     </header>
