@@ -31,7 +31,43 @@ export default function NewPostPage() {
   }, [router]);
 
   const submit = async () => {
-    setMsg(null);
+  setMsg(null);
+
+  if (!title.trim() || !description.trim()) {
+    setMsg("Title and description are required.");
+    return;
+  }
+
+  setLoading(true);
+
+  // ✅ جلب المستخدم الحالي (مهم حتى نرسل user_id)
+  const { data: uData, error: uErr } = await supabase.auth.getUser();
+
+  if (uErr || !uData.user) {
+    setLoading(false);
+    setMsg("Please login again.");
+    router.replace("/login");
+    return;
+  }
+
+  const user_id = uData.user.id;
+
+  const { error } = await supabase.from("posts").insert({
+    title: title.trim(),
+    description: description.trim(),
+    category,
+    user_id, // ✅ هنا الإضافة
+  });
+
+  setLoading(false);
+
+  if (error) {
+    setMsg(error.message);
+    return;
+  }
+
+  router.push("/");
+};
 
     if (!title.trim() || !description.trim()) {
       setMsg("Title and description are required.");
