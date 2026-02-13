@@ -2,106 +2,190 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { supabase } from "../lib/supabaseClient";
+import { supabase } from "@/lib/supabaseClient";
+import type { Post } from "@/lib/types";
 
-type Post = {
-  id: string;
-  title: string;
-  description: string;
-  category: string;
-  created_at: string;
-};
-
-const tabs = ["All", "Travel", "Work", "Health"] as const;
-type Tab = (typeof tabs)[number];
+const CATS = ["All", "Travel", "Work", "Health"] as const;
+const PAGE_SIZE = 12;
 
 export default function HomePage() {
   const [posts, setPosts] = useState<Post[]>([]);
-  const [query, setQuery] = useState("");
-  const [tab, setTab] = useState<Tab>("All");
+  const [loading, setLoading] = useState(true);
+  const [moreLoading, setMoreLoading] = useState(false);
+  const [authed, setAuthed] = useState(false);
+  const [q, setQ] = useState("");
+  const [cat, setCat] = useState<(typeof CATS)[number]>("All");
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+
+  const fetchPage = async (pageIndex: number, append: boolean) => {
+    const from = pageIndex * PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
+
+    const { data, error } = await supabase
+      .from("posts")
+      .select("id,title,description,category,created_at")
+      .order("created_at", { ascending: false })
+      .range(from, to);
+
+    if (error) return { rows: [] as Post[], ok: false };
+
+    const rows = (data ?? []) as Post[];
+    setHasMore(rows.length === PAGE_SIZE);
+
+    if (append) setPosts((prev) => [...prev, ...rows]);
+    else setPosts(rows);
+
+    return { rows, ok: true };
+  };
+
+  const loadFirst = async () => {
+    setLoading(true);
+    const { data: sess } = await supabase.auth.getSession();
+    setAuthed(!!sess.session);
+
+    setPage(0);
+    await fetchPage(0, false);
+
+    setLoading(false);
+  };
 
   useEffect(() => {
-    const load = async () => {
-      const { data } = await supabase
-        .from("posts")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (data) setPosts(data as Post[]);
-    };
-    load();
+    loadFirst();
+    const { data: sub } = supabase.auth.onAuthStateChange(() => loadFirst());
+    return () => sub.subscription.unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const loadMore = async () => {
+    if (moreLoading || !hasMore) return;
+    setMoreLoading(true);
+    const next = page + 1;
+    const res = await fetchPage(next, true);
+    if (res.ok) setPage(next);
+    setMoreLoading(false);
+  };
+
   const filtered = useMemo(() => {
+    const query = q.trim().toLowerCase();
     return posts.filter((p) => {
-      const okTab = tab === "All" ? true : p.category === tab;
-      const q = query.trim().toLowerCase();
-      const okQuery =
-        !q ||
-        p.title.toLowerCase().includes(q) ||
-        p.description.toLowerCase().includes(q);
-      return okTab && okQuery;
+      const catOk = cat === "All" ? true : p.category === cat;
+      const qOk =
+        !query ||
+        p.title.toLowerCase().includes(query) ||
+        p.description.toLowerCase().includes(query);
+      return catOk && qOk;
     });
-  }, [posts, query, tab]);
+  }, [posts, q, cat]);
 
   return (
-    <main className="space-y-10">
-      <section className="rounded-3xl border border-white/10 bg-white/5 p-8">
-        <h1 className="text-5xl font-extrabold tracking-tight">
-          Share experiences.
-        </h1>
-        <p className="text-white/70 mt-3">
-          Real stories in Travel, Work, and Health — calm, clean, and fast.
-        </p>
-
-        <div className="mt-8 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 items-center">
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search posts..."
-            className="w-full rounded-2xl bg-slate-900/60 border border-white/10 px-5 py-4 outline-none focus:border-white/20"
-          />
-
-          <div className="flex flex-wrap gap-3 justify-start md:justify-end">
-            {tabs.map((t) => (
-              <button
-                key={t}
-                onClick={() => setTab(t)}
-                className={
-                  "px-6 py-4 rounded-2xl border transition " +
-                  (tab === t
-                    ? "bg-white text-black border-white"
-                    : "bg-white/5 border-white/10 hover:border-white/20")
-                }
-              >
-                {t}
-              </button>
-            ))}
-          </div>
+    <main className="max-w-5xl mx-auto px-4 py-8">
+      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between mb-6">
+        <div>
+          <h1 className="text-3xl font-extrabold tracking-tight">
+            Experio Feed
+          </h1>
+          <p className="opacity-70 mt-1">
+            Share real experiences in Travel, Work, and Health.
+          </p>
         </div>
-      </section>
 
-      <section className="space-y-6">
-        {filtered.map((post) => (
-          <Link key={post.id} href={`/post/${post.id}`}>
-            <article className="rounded-3xl border border-white/10 bg-white/5 p-8 hover:border-white/20 transition">
-              <div className="flex items-start justify-between gap-6">
-                <div>
-                  <h2 className="text-2xl font-bold">{post.title}</h2>
-                  <p className="text-white/70 mt-2">{post.description}</p>
-                  <p className="text-white/40 text-sm mt-4">
-                    {new Date(post.created_at).toLocaleString()}
-                  </p>
+        <div className="flex gap-3">
+          {authed ? (
+            <Link
+              href="/new"
+              className="px-4 py-2 rounded-2xl bg-white text-slate-900 font-semibold"
+            >
+              + New Post
+            </Link>
+          ) : (
+            <Link
+              href="/login"
+              className="px-4 py-2 rounded-2xl bg-white text-slate-900 font-semibold"
+            >
+              Login
+            </Link>
+          )}
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-3 mb-6">
+        <div className="md:col-span-2">
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search by title or description..."
+            className="w-full px-4 py-3 rounded-2xl bg-white/5 border border-white/10 outline-none focus:border-white/20"
+          />
+        </div>
+
+        <select
+          value={cat}
+          onChange={(e) => setCat(e.target.value as any)}
+          className="w-full px-4 py-3 rounded-2xl bg-white/5 border border-white/10 outline-none focus:border-white/20"
+        >
+          {CATS.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {loading ? (
+        <div className="opacity-80">Loading...</div>
+      ) : filtered.length === 0 ? (
+        <div className="p-6 rounded-2xl border border-white/10 bg-white/5">
+          <div className="font-semibold">No posts found</div>
+          <div className="opacity-75 mt-1">Try another keyword or category.</div>
+        </div>
+      ) : (
+        <>
+          <div className="grid gap-4 md:grid-cols-2">
+            {filtered.map((p) => (
+              <Link
+                key={p.id}
+                href={`/post/${p.id}`}
+                className="group block p-5 rounded-3xl border border-white/10 bg-white/5 hover:bg-white/10 transition"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <h2 className="text-lg font-bold leading-snug group-hover:underline">
+                    {p.title}
+                  </h2>
+                  <span className="shrink-0 text-xs px-2 py-1 rounded-full bg-white/10">
+                    {p.category}
+                  </span>
                 </div>
 
-                <span className="px-4 py-2 rounded-full border border-white/10 bg-white/5 text-sm">
-                  {post.category}
-                </span>
-              </div>
-            </article>
-          </Link>
-        ))}
-      </section>
+                <p className="mt-3 opacity-85 line-clamp-3 leading-7">
+                  {p.description}
+                </p>
+
+                <div className="mt-4 flex items-center justify-between text-xs opacity-60">
+                  <span>
+                    {p.created_at
+                      ? new Date(p.created_at).toLocaleString()
+                      : ""}
+                  </span>
+                  <span className="opacity-70 group-hover:opacity-100">
+                    Open →
+                  </span>
+                </div>
+              </Link>
+            ))}
+          </div>
+
+          <div className="mt-6 flex justify-center">
+            <button
+              onClick={loadMore}
+              disabled={moreLoading || !hasMore}
+              className="px-5 py-3 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 disabled:opacity-50"
+            >
+              {moreLoading ? "Loading..." : hasMore ? "Load more" : "No more"}
+            </button>
+          </div>
+        </>
+      )}
     </main>
   );
 }
