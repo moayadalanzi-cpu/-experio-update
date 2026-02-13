@@ -1,106 +1,185 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabaseClient";
+import type { Post } from "@/lib/types";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { supabase } from "../../../lib/supabaseClient";
 
-type Post = {
-  id: string;
-  title: string;
-  description: string;
-  category: string;
-  created_at?: string;
-};
-
-export default function PostPage() {
-  const params = useParams();
-  const id = String(params?.id || "");
-
+export default function PostDetailsPage({
+  params,
+}: {
+  params: { id: string };
+}) {
   const [post, setPost] = useState<Post | null>(null);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
+
+  const [userId, setUserId] = useState<string | null>(null);
+  const [authed, setAuthed] = useState(false);
+  const [likeBusy, setLikeBusy] = useState(false);
 
   const load = async () => {
     setLoading(true);
-    setErr(null);
 
-    const { data, error } = await supabase
+    const { data: sess } = await supabase.auth.getSession();
+    const uid = sess.session?.user.id ?? null;
+    setAuthed(!!sess.session);
+    setUserId(uid);
+
+    // 1) get post
+    const { data: p, error: pErr } = await supabase
       .from("posts")
-      .select("*")
-      .eq("id", id)
+      .select("id,title,description,category,created_at")
+      .eq("id", params.id)
       .single();
 
-    if (error) setErr(error.message);
-    else setPost(data as Post);
+    if (pErr || !p) {
+      setPost(null);
+      setLoading(false);
+      return;
+    }
+
+    // 2) count likes
+    const { count } = await supabase
+      .from("post_likes")
+      .select("*", { count: "exact", head: true })
+      .eq("post_id", params.id);
+
+    // 3) liked by me?
+    let likedByMe = false;
+    if (uid) {
+      const { data: my } = await supabase
+        .from("post_likes")
+        .select("id")
+        .eq("post_id", params.id)
+        .eq("user_id", uid)
+        .maybeSingle();
+
+      likedByMe = !!my;
+    }
+
+    setPost({
+      ...(p as Post),
+      likes_count: count ?? 0,
+      liked_by_me: likedByMe,
+    });
 
     setLoading(false);
   };
 
   useEffect(() => {
-    if (id) load();
-  }, [id]);
+    load();
+    const { data: sub } = supabase.auth.onAuthStateChange(() => load());
+    return () => sub.subscription.unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.id]);
+
+  const toggleLike = async () => {
+    if (!post) return;
+
+    if (!userId) {
+      window.location.href = "/login";
+      return;
+    }
+
+    if (likeBusy) return;
+    setLikeBusy(true);
+
+    // optimistic update
+    const wasLiked = !!post.liked_by_me;
+    setPost({
+      ...post,
+      liked_by_me: !wasLiked,
+      likes_count: (post.likes_count ?? 0) + (wasLiked ? -1 : 1),
+    });
+
+    if (wasLiked) {
+      const { error } = await supabase
+        .from("post_likes")
+        .delete()
+        .eq("post_id", post.id)
+        .eq("user_id", userId);
+
+      if (error) {
+        // rollback
+        setPost((prev) =>
+          prev
+            ? {
+                ...prev,
+                liked_by_me: true,
+                likes_count: (prev.likes_count ?? 0) + 1,
+              }
+            : prev
+        );
+      }
+    } else {
+      const { error } = await supabase.from("post_likes").insert({
+        post_id: post.id,
+        user_id: userId,
+      });
+
+      if (error) {
+        // rollback
+        setPost((prev) =>
+          prev
+            ? {
+                ...prev,
+                liked_by_me: false,
+                likes_count: Math.max((prev.likes_count ?? 0) - 1, 0),
+              }
+            : prev
+        );
+      }
+    }
+
+    setLikeBusy(false);
+  };
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <header className="sticky top-0 z-50 border-b border-white/10 bg-slate-950/60 backdrop-blur">
-        <div className="mx-auto max-w-5xl px-4 py-4 flex items-center justify-between">
-          <Link href="/" className="text-xl font-semibold tracking-tight">
-            Experio
-          </Link>
-          <div className="flex items-center gap-4">
-            <Link href="/" className="text-white/70 hover:text-white">
-              Home
-            </Link>
-            <Link
-              href="/new"
-              className="rounded-xl bg-blue-600 hover:bg-blue-500 px-4 py-2 font-medium"
-            >
-              + New Post
-            </Link>
+    <main className="max-w-3xl mx-auto px-4 py-10">
+      <Link href="/" className="opacity-80 hover:opacity-100">
+        ← Back
+      </Link>
+
+      {loading ? (
+        <div className="mt-6 opacity-80">Loading...</div>
+      ) : !post ? (
+        <div className="mt-6 opacity-80">Post not found.</div>
+      ) : (
+        <article className="mt-6 p-5 rounded-3xl border border-white/10 bg-white/5">
+          <div className="flex items-start justify-between gap-3">
+            <h1 className="text-2xl font-extrabold leading-snug">
+              {post.title}
+            </h1>
+            <span className="shrink-0 text-xs px-2 py-1 rounded-full bg-white/10">
+              {post.category}
+            </span>
           </div>
-        </div>
-      </header>
 
-      <section className="mx-auto max-w-5xl px-4 py-10">
-        <Link href="/" className="text-white/70 hover:text-white">
-          ← Back
-        </Link>
+          <p className="mt-4 leading-7 opacity-90 whitespace-pre-wrap">
+            {post.description}
+          </p>
 
-        <div className="mt-6 mx-auto max-w-2xl rounded-3xl border border-white/10 bg-white/5 p-8">
-          {loading ? (
-            <div className="text-white/60">Loading...</div>
-          ) : err ? (
-            <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-red-200">
-              {err}
-            </div>
-          ) : !post ? (
-            <div className="text-white/60">Not found.</div>
-          ) : (
-            <div className="flex items-start justify-between gap-6">
-              <div>
-                <h1 className="text-4xl font-bold">{post.title}</h1>
-                <p className="mt-2 text-white/40 text-sm">
-                  {post.created_at ? new Date(post.created_at).toLocaleString() : ""}
-                </p>
-                <p className="mt-8 text-white/80 text-lg leading-relaxed">
-                  {post.description}
-                </p>
-              </div>
-              <span className="h-fit rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white/80">
-                {post.category}
-              </span>
-            </div>
-          )}
-        </div>
-      </section>
+          <div className="mt-6 flex items-center justify-between">
+            <button
+              onClick={toggleLike}
+              disabled={!authed || likeBusy}
+              className={`px-4 py-2 rounded-2xl border border-white/10 disabled:opacity-50 ${
+                post.liked_by_me
+                  ? "bg-white text-slate-900 font-semibold"
+                  : "bg-white/10 hover:bg-white/15"
+              }`}
+            >
+              {post.liked_by_me ? "Liked" : "Like"}
+            </button>
 
-      <footer className="border-t border-white/10">
-        <div className="mx-auto max-w-5xl px-4 py-6 flex justify-between text-white/50 text-sm">
-          <span>© {new Date().getFullYear()} Experio</span>
-          <span>Built for real experiences.</span>
-        </div>
-      </footer>
+            <div className="text-sm opacity-80">👍 {post.likes_count ?? 0}</div>
+          </div>
+
+          <p className="mt-6 text-xs opacity-60">
+            {post.created_at ? new Date(post.created_at).toLocaleString() : ""}
+          </p>
+        </article>
+      )}
     </main>
   );
 }
